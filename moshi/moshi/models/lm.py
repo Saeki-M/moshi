@@ -376,24 +376,32 @@ class LMModel(StreamingContainer):
         assert (
             K == self.num_codebooks
         ), f"Sequence shape {sequence.shape} must match the number of codebooks."
+        # input_sequence: shape [1, 17, 1] combination of the audio tokens of the two speaker + inner monologue text token
         input_sequence = sequence
         input_ = None
+        # iterate for each audio codebook
         for cb_index in range(self.num_audio_codebooks):
-            audio_emb = self.emb[cb_index](
-                input_sequence[:, cb_index + self.audio_offset]
-            )
+            # convert audio codec to embedding
+            audio_emb = self.emb[cb_index](input_sequence[:, cb_index + self.audio_offset])
+            # input_ is the accumulated embedding of all audio tokens. It uses the sum instead of average pooling...?
             input_ = audio_emb if input_ is None else input_ + audio_emb
+        # embed text token
         text_emb = self.text_emb(input_sequence[:, 0])
 
+        # is there a possibility audio token is none? maybe when used as a sore language model?
         input_ = text_emb if input_ is None else input_ + text_emb
         if sum_condition is not None:
             input_ = input_ + sum_condition.to(input_)
         if cross_attention_src is not None:
             cross_attention_src = cross_attention_src.to(input_)
+        # self.transformer is the LLM? if so, we should replace this with Llama
+        # transformer_out is shape [1, 1, 4096]
         transformer_out = self.transformer(input_, cross_attention_src=cross_attention_src)
         if self.out_norm:
+            # normalization
             transformer_out = self.out_norm(transformer_out)
         assert isinstance(transformer_out, torch.Tensor)
+        # convert shape [1, 1, 4096] to [1, 1, 1, 32000])
         text_logits = self.text_linear(transformer_out)
         text_logits = text_logits[:, None]
         return transformer_out, text_logits
@@ -463,20 +471,24 @@ class LMModel(StreamingContainer):
             in_index = depformer_cb_index
             if self.depformer_weights_per_step_schedule is not None:
                 in_index = self.depformer_weights_per_step_schedule[in_index]
+            # convert shape 4096 to 1024 with different linear layer for each audio token layer
             depformer_input = self.depformer_in[in_index](depformer_input)
         else:
             depformer_input = self.depformer_in[0](depformer_input)
         if depformer_cb_index == 0:
             last_token_input = self.depformer_text_emb(sequence[:, 0])
         else:
+            # convert last audio token to embedding of shape 1024
             last_token_input = self.depformer_emb[depformer_cb_index - 1](
                 sequence[:, 0]
             )
         assert last_token_input is not None
+        # simply adding embedding based on the last token to the transformer output
         depformer_input = depformer_input + last_token_input
         assert depformer_input.shape[1] == 1
         # depformer_input is [B, 1, depformer_dim].
         # The streaming state of the depformer ensures that the proper layer is run.
+        # is depformer same for all codebooks?
         dep_output = self.depformer(depformer_input)
         logits = self.linears[depformer_cb_index](dep_output)
         logits = logits[:, None]
@@ -715,6 +727,7 @@ class LMGen(StreamingModule[_LMGenState]):
                 input_[B:, :1] = torch.where(~is_init[:, :1], zero, input_[B:, :1])
 
         transformer_out, text_logits = state.graphed_main(input_, state.condition_sum, state.condition_cross)
+        # classifier-free guidance (CFG) coefficient
         if self.cfg_coef != 1.:
             logits, logits_null = text_logits.chunk(2)
             if self.cfg_is_no_text:
@@ -724,6 +737,7 @@ class LMGen(StreamingModule[_LMGenState]):
         # Shape of text_logits should be [B, K_text=1, T=1, Card_text]
         if self.on_text_logits_hook:
             self.on_text_logits_hook(text_logits)
+        # sample text token from the logits. Is this the inner monologue text token?
         text_token = sample_token(
             text_logits.float(),
             self.use_sampling,
@@ -739,6 +753,11 @@ class LMGen(StreamingModule[_LMGenState]):
         if state.graphed_depth is None:
             audio_tokens = None
         elif depformer_replace_tokens is None:
+            #  why do we feed in text_token and transformer_out?
+            # text token is the pure text information of what the system will say next
+            # transformer_out is the output before the text embedding linear layer
+            # perhaps transformer_out contains what and how the system should say, and the linear layer is
+            #  extracting the text information from it?
             audio_tokens = state.graphed_depth(text_token, transformer_out)
             if self.on_audio_hook is not None:
                 self.on_audio_hook(audio_tokens)
@@ -798,6 +817,9 @@ class LMGen(StreamingModule[_LMGenState]):
         text_token: torch.Tensor,
         transformer_out: torch.Tensor,
     ) -> torch.Tensor:
+        # main function to run the Depth transformer
+        # text_token is the inner monologue text token, shape [B, 1, 1]
+        # transformer_out is the output before the text embedding linear layer, shape [B, 1, 4096]
         B, = text_token.shape
         B_cfg = B
         if self.cfg_coef != 1.:
@@ -813,7 +835,8 @@ class LMGen(StreamingModule[_LMGenState]):
                 input_ = prev_token[:, None, None]
                 if self.cfg_coef != 1.:
                     input_ = input_.repeat(2, 1, 1)
-                logits = lm_model.forward_depformer(cb_index, input_, transformer_out)
+                # starting with the text token, sequentially generate higher level audio tokens
+                logits = lm_model.forward_depformer(cb_index, input_, transformer_out)  # logits is shape 2048
                 if self.cfg_coef != 1.:
                     logits, logits_null = logits.chunk(2)
                     logits = logits_null + (logits - logits_null) * self.cfg_coef
@@ -832,6 +855,6 @@ class LMGen(StreamingModule[_LMGenState]):
             len(depformer_tokens),
             lm_model.dep_q,
         )
-        out = torch.stack(depformer_tokens, dim=1)
+        out = torch.stack(depformer_tokens, dim=1) # shape [B, 8]
         assert out.shape == (B, lm_model.dep_q), out.shape
         return out
