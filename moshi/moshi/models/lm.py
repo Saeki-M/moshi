@@ -21,6 +21,7 @@ from ..utils.compile import CUDAGraphed
 from ..utils.quantize import replace_linear_with_qlinear
 from ..modules.streaming import StreamingContainer, StreamingModule, State
 from ..modules.transformer import StreamingTransformer, create_norm_fn
+from ..modules.llama_lm import LlamaLM
 from .lm_utils import (_delay_sequence,
                        _undelay_sequence,
                        _init_layer,
@@ -227,6 +228,8 @@ class LMModel(StreamingContainer):
             [nn.Linear(dim, self.card, bias=bias_proj) for _ in range(dep_q)]
         )
         self.to(device=device, dtype=dtype)
+        self.llama = LlamaLM()
+        self.llama.to(device="cuda")
         # We always keep the condition provider as float32.
         self.condition_provider = condition_provider
         self.fuser = fuser
@@ -394,9 +397,9 @@ class LMModel(StreamingContainer):
             input_ = input_ + sum_condition.to(input_)
         if cross_attention_src is not None:
             cross_attention_src = cross_attention_src.to(input_)
-        # self.transformer is the LLM? if so, we should replace this with Llama
+        # self.transformer is the LLM, so we should replace this with Llama
         # transformer_out is shape [1, 1, 4096]
-        transformer_out = self.transformer(input_, cross_attention_src=cross_attention_src)
+        transformer_out = self.llama(input_, cross_attention_src=cross_attention_src)
         if self.out_norm:
             # normalization
             transformer_out = self.out_norm(transformer_out)

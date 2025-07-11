@@ -386,7 +386,7 @@ def get_moshi_lm(
                     else:
                         value = value.to(dtype)
                 state[key] = value
-            model.load_state_dict(state, assign=True)
+            model.load_state_dict(state, strict=False, assign=True)  # TODO: avoid loading 
 
         else:
             pkg = torch.load(filename, "cpu",)

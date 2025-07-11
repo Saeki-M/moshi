@@ -1,0 +1,24 @@
+StreamingTransformer(
+  (rope): RotaryEmbedding()
+  (layers): ModuleList(
+    (0-31): 32 x StreamingTransformerLayer(
+      (self_attn): StreamingMultiheadAttention(
+        (rope): RotaryEmbedding()
+        (out_projs): ModuleList(
+          (0): Linear(in_features=4096, out_features=4096, bias=False)
+        )
+        (in_projs): ModuleList(
+          (0): Linear(in_features=4096, out_features=12288, bias=False)
+        )
+      )
+      (norm1): RMSNorm()
+      (norm2): RMSNorm()
+      (gating): ActivationGating(
+        (linear_in): Linear(in_features=4096, out_features=22528, bias=False)
+        (linear_out): Linear(in_features=11264, out_features=4096, bias=False)
+      )
+      (layer_scale_1): Identity()
+      (layer_scale_2): Identity()
+    )
+  )
+)

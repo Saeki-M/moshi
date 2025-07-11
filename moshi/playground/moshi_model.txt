@@ -1,0 +1,68 @@
+Moshi LM architecture:
+LMModel(
+  (emb): ModuleList(
+    (0-15): 16 x ScaledEmbedding(2049, 4096)
+  )
+  (text_emb): ScaledEmbedding(32001, 4096)
+  (text_linear): Linear(in_features=4096, out_features=32000, bias=False)
+  (transformer): StreamingTransformer(
+    (rope): RotaryEmbedding()
+    (layers): ModuleList(
+      (0-31): 32 x StreamingTransformerLayer(
+        (self_attn): StreamingMultiheadAttention(
+          (rope): RotaryEmbedding()
+          (out_projs): ModuleList(
+            (0): Linear(in_features=4096, out_features=4096, bias=False)
+          )
+          (in_projs): ModuleList(
+            (0): Linear(in_features=4096, out_features=12288, bias=False)
+          )
+        )
+        (norm1): RMSNorm()
+        (norm2): RMSNorm()
+        (gating): ActivationGating(
+          (linear_in): Linear(in_features=4096, out_features=22528, bias=False)
+          (linear_out): Linear(in_features=11264, out_features=4096, bias=False)
+        )
+        (layer_scale_1): Identity()
+        (layer_scale_2): Identity()
+      )
+    )
+  )
+  (out_norm): RMSNorm()
+  (depformer_in): ModuleList(
+    (0-7): 8 x Linear(in_features=4096, out_features=1024, bias=False)
+  )
+  (depformer_emb): ModuleList(
+    (0-6): 7 x ScaledEmbedding(2049, 1024)
+  )
+  (depformer_text_emb): ScaledEmbedding(32001, 1024)
+  (depformer): StreamingTransformer(
+    (layers): ModuleList(
+      (0-5): 6 x StreamingTransformerLayer(
+        (self_attn): StreamingMultiheadAttention(
+          (out_projs): ModuleList(
+            (0-7): 8 x Linear(in_features=1024, out_features=1024, bias=False)
+          )
+          (in_projs): ModuleList(
+            (0-7): 8 x Linear(in_features=1024, out_features=3072, bias=False)
+          )
+        )
+        (norm1): RMSNorm()
+        (norm2): RMSNorm()
+        (gating): ModuleList(
+          (0-7): 8 x ActivationGating(
+            (linear_in): Linear(in_features=1024, out_features=5632, bias=False)
+            (linear_out): Linear(in_features=2816, out_features=1024, bias=False)
+          )
+        )
+        (layer_scale_1): Identity()
+        (layer_scale_2): Identity()
+      )
+    )
+  )
+  (extra_heads): ModuleList()
+  (linears): ModuleList(
+    (0-7): 8 x Linear(in_features=1024, out_features=2048, bias=False)
+  )
+)
