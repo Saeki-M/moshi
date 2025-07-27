@@ -145,19 +145,19 @@ class LMModel(StreamingContainer):
         main_kwargs = {
             k: v for k, v in kwargs.items() if not k.startswith(depformer_prefix)
         }
-        self.transformer = StreamingTransformer(
-            d_model=dim,
-            num_heads=num_heads,
-            dim_feedforward=int(hidden_scale * dim),
-            norm=norm,
-            device=device,
-            dtype=dtype,
-            quantize=quantize,
-            context=context,
-            causal=causal,
-            checkpointing=gradient_checkpointing,
-            **main_kwargs,
-        )
+        # self.transformer = StreamingTransformer(
+        #     d_model=dim,
+        #     num_heads=num_heads,
+        #     dim_feedforward=int(hidden_scale * dim),
+        #     norm=norm,
+        #     device=device,
+        #     dtype=dtype,
+        #     quantize=quantize,
+        #     context=context,
+        #     causal=causal,
+        #     checkpointing=gradient_checkpointing,
+        #     **main_kwargs,
+        # )
         self.out_norm = create_norm_fn(norm, dim)
         self.depformer_multi_linear = depformer_multi_linear
         kwargs_dep = main_kwargs.copy()
@@ -399,6 +399,7 @@ class LMModel(StreamingContainer):
             cross_attention_src = cross_attention_src.to(input_)
         # self.transformer is the LLM, so we should replace this with Llama
         # transformer_out is shape [1, 1, 4096]
+        # transformer_out = self.transformer(input_, cross_attention_src=cross_attention_src)
         transformer_out = self.llama(input_, cross_attention_src=cross_attention_src)
         if self.out_norm:
             # normalization
@@ -518,8 +519,8 @@ class LMModel(StreamingContainer):
             _init_layer(self.depformer_text_emb)
         _init_layer(self.text_linear)
 
-        for tr_layer in self.transformer.layers:
-            tr_layer.apply(_init_layer)
+        # for tr_layer in self.transformer.layers:
+        #     tr_layer.apply(_init_layer)
 
         for linear in self.linears:
             _init_layer(linear)
