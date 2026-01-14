@@ -18,6 +18,7 @@ from aiohttp import web
 from huggingface_hub import hf_hub_download
 import numpy as np
 import sentencepiece
+import soundfile as sf
 import sphn
 import torch
 from .client_utils import log
@@ -36,6 +37,25 @@ def seed_all(seed):
     torch.backends.cudnn.benchmark = False
 
 
+def load_audio(audio_file: str, target_sr: int) -> torch.Tensor:
+    """Load and preprocess audio file for conditioning."""
+    pcm, sr = sf.read(audio_file)
+    pcm = torch.from_numpy(pcm).float()
+    if pcm.ndim == 1:
+        pcm = pcm.unsqueeze(0)  # [1, time]
+    else:
+        pcm = pcm.transpose(0, 1)  # [channels, time]
+    if sr != target_sr:
+        new_length = int(pcm.shape[-1] * target_sr / sr)
+        pcm = torch.nn.functional.interpolate(pcm.unsqueeze(0), size=new_length, mode='linear').squeeze(0)
+    # Ensure mono audio
+    if pcm.shape[0] > 1:
+        pcm = pcm.mean(dim=0, keepdim=True)
+    # Add batch dimension: [1, 1, time]
+    pcm = pcm.unsqueeze(0)
+    return pcm
+
+
 @dataclass
 class ServerState:
     model_type: str
@@ -45,7 +65,7 @@ class ServerState:
     lock: asyncio.Lock
 
     def __init__(self, model_type: str, mimi: MimiModel, text_tokenizer: sentencepiece.SentencePieceProcessor,
-                 lm: LMModel, cfg_coef: float, device: str | torch.device, **kwargs):
+                 lm: LMModel, cfg_coef: float, device: str | torch.device, initial_audio_file: str | None = None, **kwargs):
         self.model_type = model_type
         self.mimi = mimi
         self.text_tokenizer = text_tokenizer
@@ -56,8 +76,15 @@ class ServerState:
         self.frame_size = int(self.mimi.sample_rate / self.mimi.frame_rate)
         self.lock = asyncio.Lock()
 
+        # Store initial audio for conditioning
+        self.initial_pcm = None
+        if initial_audio_file is not None:
+            self.initial_pcm = load_audio(initial_audio_file, target_sr=self.mimi.sample_rate)
+
         self.mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
+
+    
 
     def warmup(self):
         for chunk in range(4):
@@ -70,6 +97,24 @@ class ServerState:
                 _ = self.mimi.decode(tokens[:, 1:])
 
         torch.cuda.synchronize()
+
+    def condition_on_audio(self):
+        """Condition the model on initial audio by processing it without sending output."""
+        # Split into frames
+        if self.initial_pcm is None:
+            return
+        
+        chunks = [
+            chunk
+            for chunk in self.initial_pcm.split(self.frame_size, dim=2)
+            if chunk.shape[-1] == self.frame_size
+        ]
+        for chunk in chunks:
+            chunk = chunk.to(device=self.device)
+            codes = self.mimi.encode(chunk)
+            for c in range(codes.shape[-1]):
+                _ = self.lm_gen.step(codes[:, :, c: c + 1])  # Discard output
+        log("info", "conditioned on initial audio")
 
     async def decode_and_send(
         self,
@@ -162,6 +207,10 @@ class ServerState:
             opus_reader = sphn.OpusStreamReader(self.mimi.sample_rate)
             self.mimi.reset_streaming()
             self.lm_gen.reset_streaming()
+
+            # condition model on initial audio if any
+            self.condition_on_audio()
+
             # Send the handshake.
             await ws.send_bytes(b"\x00")
             await self.recv_loop(ws, opus_reader, opus_writer)
@@ -192,6 +241,7 @@ def main():
                         help="Do not fuse LoRA layers intot Linear layers.")
     parser.add_argument("--half", action="store_const", const=torch.float16, default=torch.bfloat16,
                         dest="dtype", help="Run inference with float16, not bfloat16, better for old GPUs.")
+    parser.add_argument("--initial-audio", type=str, help="Path to an initial audio file to condition the model on.", default=None)
     parser.add_argument(
         "--ssl",
         type=str,
@@ -233,8 +283,14 @@ def main():
     lm = checkpoint_info.get_moshi(device=args.device, dtype=args.dtype, fuse_lora=args.fuse_lora)
     log("info", "moshi loaded")
 
-    state = ServerState(checkpoint_info.model_type, mimi, text_tokenizer, lm, args.cfg_coef, args.device,
-                        **checkpoint_info.lm_gen_config)
+    state = ServerState(
+        checkpoint_info.model_type, 
+        mimi, text_tokenizer, 
+        lm, args.cfg_coef, 
+        args.device,
+        initial_audio_file=args.initial_audio,
+        **checkpoint_info.lm_gen_config
+    )
     log("info", "warming up the model")
     state.warmup()
     app = web.Application()

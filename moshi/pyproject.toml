@@ -14,6 +14,7 @@ dependencies = [
     "torch >= 2.2.0, < 2.10",
     "aiohttp>=3.10.5, <3.12",
     "tqdm >= 4.48",
+    "soundfile>=0.13.1",
 ]
 authors = [{name="Laurent Mazaré", email="laurent@kyutai.org"}]
 maintainers = [{name="Laurent Mazaré", email="laurent@kyutai.org"}]
